@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>FIR Filter Playground</title>
+<style>
+:root{--bg1:#0f0c29;--bg2:#302b63;--bg3:#24243e;--card:rgba(255,255,255,.07);--tx:#f4f4ff;--mut:#a9a9d0;--grid:rgba(255,255,255,.12);
+--c0:#ff5d8f;--c1:#ffb703;--c2:#2ee6a8;--c3:#4cc9f0;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:light){:root{--bg1:#0f0c29;--bg2:#302b63;--bg3:#24243e}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0;overflow:hidden;overscroll-behavior:none}
+body{background:linear-gradient(160deg,var(--bg1),var(--bg2) 55%,var(--bg3));color:var(--tx);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;flex-direction:column;gap:6px;padding:8px 10px;user-select:none;-webkit-user-select:none}
+h1{margin:0;font-size:16px;font-weight:800;letter-spacing:.3px;display:flex;justify-content:space-between;align-items:baseline}
+h1 span{background:linear-gradient(90deg,var(--c0),var(--c1),var(--c2),var(--c3));-webkit-background-clip:text;background-clip:text;color:transparent}
+h1 small{font-size:10px;color:var(--mut);font-weight:500}
+.card{background:var(--card);border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:6px 8px;display:flex;flex-direction:column;min-height:0;position:relative}
+.card b{font-size:10.5px;letter-spacing:.6px;text-transform:uppercase;color:var(--mut);font-weight:700;display:flex;justify-content:space-between}
+.card b i{font-style:normal;color:var(--tx);opacity:.7;text-transform:none;letter-spacing:0}
+.cv{flex:1;min-height:0;position:relative}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+#coef{touch-action:none;cursor:ns-resize}
+#diag{height:78px;flex:none}
+#diag svg{width:100%;height:100%}
+#eq{font-size:11.5px;text-align:center;font-family:ui-monospace,Menlo,monospace;flex:none;line-height:1.3}
+.c0{color:var(--c0)}.c1{color:var(--c1)}.c2{color:var(--c2)}.c3{color:var(--c3)}
+.pre{display:flex;gap:5px;flex:none}
+.pre button{flex:1;border:0;border-radius:10px;padding:7px 2px;font-size:11px;font-weight:700;color:#14123a;background:linear-gradient(135deg,var(--c3),var(--c2));font-family:inherit}
+.pre button:nth-child(2){background:linear-gradient(135deg,var(--c1),var(--c0))}
+.pre button:nth-child(3){background:linear-gradient(135deg,var(--c0),#b388ff)}
+.pre button:nth-child(4){background:linear-gradient(135deg,#b388ff,var(--c3))}
+.pre button:active{transform:scale(.95)}
+#r1{flex:1.25}#r2{flex:.9}#r3{flex:1.2}
+</style>
+</head>
+<body>
+<h1><span>FIR Filter Playground</span><small>drag the stems ↕</small></h1>
+
+<div class="card" id="diag">
+<svg viewBox="0 0 360 74" id="svg" font-family="system-ui,sans-serif" font-size="10"></svg>
+</div>
+<div id="eq"></div>
+
+<div class="card" id="r1"><b>Set coefficients <i>tap &amp; drag a stem</i></b><div class="cv"><canvas id="coef"></canvas></div></div>
+<div class="card" id="r2"><b>Impulse response <i>h[n] vs time</i></b><div class="cv"><canvas id="imp"></canvas></div></div>
+<div class="card" id="r3"><b>Frequency response <i id="pk"></i></b><div class="cv"><canvas id="freq"></canvas></div></div>
+
+<div class="pre">
+<button data-p="0.25,0.25,0.25,0.25">Low-pass</button>
+<button data-p="0.5,-0.5,0.5,-0.5">High-pass</button>
+<button data-p="1,-1,0,0">Differ.</button>
+<button data-p="1,0,0,0">Reset</button>
+</div>
+<div class="pre">
+<button data-p="0.5,0.5,-0.5,-0.5">Band-pass</button>
+<button data-p="0.5,0,0.5,0">Band-stop</button>
+</div>
+
+<script>
+(function(){
+var COL=['#ff5d8f','#ffb703','#2ee6a8','#4cc9f0'];
+var a=[0.4,0.3,0.2,0.1];
+var N=4;
+
+function fit(cv){var r=cv.getBoundingClientRect(),d=window.devicePixelRatio||1;
+  cv.width=Math.max(1,r.width*d);cv.height=Math.max(1,r.height*d);
+  var c=cv.getContext('2d');c.setTransform(d,0,0,d,0,0);return{c:c,w:r.width,h:r.height};}
+
+function stemPlot(cv,vals,labels,showVal){
+  var o=fit(cv),c=o.c,w=o.w,h=o.h,padB=14,padT=12,mid=padT+(h-padT-padB)/2,sc=(h-padT-padB)/2;
+  c.clearRect(0,0,w,h);
+  c.font='10px system-ui';c.textAlign='center';
+  [1,0.5,0,-0.5,-1].forEach(function(g){var y=mid-g*sc;c.strokeStyle=g===0?'rgba(255,255,255,.45)':'rgba(255,255,255,.1)';c.lineWidth=1;
+    c.beginPath();c.moveTo(22,y);c.lineTo(w,y);c.stroke();c.fillStyle='#a9a9d0';c.textAlign='right';c.fillText(g,18,y+3);});
+  var x0=26,cw=(w-x0)/vals.length;
+  for(var i=0;i<vals.length;i++){
+    var x=x0+(i+.5)*cw,y=mid-Math.max(-1,Math.min(1,vals[i]))*sc,col=COL[i%4];
+    c.strokeStyle=col;c.lineWidth=3.5;c.lineCap='round';c.beginPath();c.moveTo(x,mid);c.lineTo(x,y);c.stroke();
+    c.shadowColor=col;c.shadowBlur=10;c.fillStyle=col;c.beginPath();c.arc(x,y,showVal?9:6,0,7);c.fill();c.shadowBlur=0;
+    if(showVal){c.fillStyle='#14123a';c.beginPath();c.arc(x,y,3,0,7);c.fill();}
+    c.fillStyle='#f4f4ff';c.textAlign='center';
+    var ty=vals[i]>=0?y-13:y+20; ty=Math.max(10,Math.min(h-2,ty));
+    c.fillText(vals[i].toFixed(2),x,ty);
+    c.fillStyle=col;c.fillText(labels[i],x,h-2);
+  }
+  return{x0:x0,cw:cw,mid:mid,sc:sc};
+}
+
+var coefCv=document.getElementById('coef'),impCv=document.getElementById('imp'),frCv=document.getElementById('freq');
+var geo;
+
+function impulse(){ // run the filter on a unit impulse
+  var L=6,x=[1,0,0,0,0,0],y=[];
+  for(var n=0;n<L;n++){var s=0;for(var k=0;k<N;k++){if(n-k>=0)s+=a[k]*x[n-k];}y.push(s);}
+  return y;
+}
+
+function drawFreq(){
+  var o=fit(frCv),c=o.c,w=o.w,h=o.h,pl=26,pb=14,pt=6,pw=w-pl-4,ph=h-pb-pt;
+  c.clearRect(0,0,w,h);
+  var P=160,m=[],mx=0;
+  for(var i=0;i<P;i++){var wv=Math.PI*i/(P-1),re=0,im=0;
+    for(var k=0;k<N;k++){re+=a[k]*Math.cos(wv*k);im-=a[k]*Math.sin(wv*k);}
+    var v=Math.sqrt(re*re+im*im);m.push(v);if(v>mx)mx=v;}
+  var top=Math.max(1,Math.ceil(mx*4)/4);
+  if(mx>1)top=Math.ceil(mx*2)/2;
+  c.font='10px system-ui';c.fillStyle='#a9a9d0';
+  var steps=4;
+  for(var g=0;g<=steps;g++){var gv=top*g/steps,y=pt+ph-ph*g/steps;
+    c.strokeStyle='rgba(255,255,255,.1)';c.lineWidth=1;c.beginPath();c.moveTo(pl,y);c.lineTo(pl+pw,y);c.stroke();
+    c.textAlign='right';c.fillText(gv.toFixed(gv%1?2:0).replace(/\.00$/,''),pl-4,y+3);}
+  c.textAlign='center';
+  [['0',0],['π/2',.5],['π',1]].forEach(function(t){var x=pl+pw*t[1];c.strokeStyle='rgba(255,255,255,.08)';c.beginPath();c.moveTo(x,pt);c.lineTo(x,pt+ph);c.stroke();});
+  c.textAlign='left';c.fillText('0',pl,h-2);c.textAlign='center';c.fillText('fs/4',pl+pw/2,h-2);c.textAlign='right';c.fillText('π = fs/2',pl+pw,h-2);
+  var gr=c.createLinearGradient(0,pt,pl+pw,0);gr.addColorStop(0,COL[0]);gr.addColorStop(.35,COL[1]);gr.addColorStop(.7,COL[2]);gr.addColorStop(1,COL[3]);
+  var fg=c.createLinearGradient(0,pt,0,pt+ph);fg.addColorStop(0,'rgba(76,201,240,.45)');fg.addColorStop(1,'rgba(176,136,255,.02)');
+  c.beginPath();c.moveTo(pl,pt+ph);
+  for(i=0;i<P;i++)c.lineTo(pl+pw*i/(P-1),pt+ph-ph*m[i]/top);
+  c.lineTo(pl+pw,pt+ph);c.closePath();c.fillStyle=fg;c.fill();
+  c.beginPath();for(i=0;i<P;i++){var X=pl+pw*i/(P-1),Y=pt+ph-ph*m[i]/top;i?c.lineTo(X,Y):c.moveTo(X,Y);}
+  c.strokeStyle=gr;c.lineWidth=3;c.lineJoin='round';c.shadowColor='#4cc9f0';c.shadowBlur=8;c.stroke();c.shadowBlur=0;
+  document.getElementById('pk').textContent='DC gain '+m[0].toFixed(2)+' · peak '+mx.toFixed(2);
+}
+
+function drawDiagram(){
+  var s=document.getElementById('svg'),h='',xs=[40,130,220],bx=[78,168,258];
+  h+='<defs><marker id="ar" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0L6,3L0,6z" fill="#a9a9d0"/></marker></defs>';
+  h+='<text x="2" y="14" fill="#f4f4ff">x(n)</text>';
+  h+='<line x1="4" y1="22" x2="355" y2="22" stroke="#a9a9d0" stroke-width="1.5" marker-end="url(#ar)"/>';
+  for(var i=0;i<3;i++)h+='<rect x="'+(bx[i]-24)+'" y="12" width="48" height="20" rx="5" fill="#302b63" stroke="#a9a9d0"/><text x="'+bx[i]+'" y="26" text-anchor="middle" fill="#f4f4ff">z⁻¹</text>';
+  var tx=[30,118,208,298];
+  // tap points
+  for(i=0;i<4;i++){
+    h+='<circle cx="'+tx[i]+'" cy="22" r="3" fill="'+COL[i]+'"/>';
+    h+='<line x1="'+tx[i]+'" y1="25" x2="'+tx[i]+'" y2="40" stroke="'+COL[i]+'" stroke-width="2"/>';
+    h+='<rect x="'+(tx[i]-17)+'" y="40" width="34" height="16" rx="4" fill="'+COL[i]+'" opacity=".9"/>';
+    h+='<text x="'+tx[i]+'" y="52" text-anchor="middle" fill="#14123a" font-weight="700" id="dl'+i+'">a'+i+'</text>';
+    h+='<line x1="'+tx[i]+'" y1="56" x2="'+[175.5,178,182,184.5][i]+'" y2="'+[63,61.2,61.2,63][i]+'" stroke="'+COL[i]+'" stroke-width="1.5"/>';
+  }
+  h+='<circle cx="180" cy="67" r="6" fill="none" stroke="#f4f4ff" stroke-width="1.5"/><text x="180" y="71" text-anchor="middle" fill="#f4f4ff" font-size="11">+</text>';
+  h+='<line x1="187" y1="67" x2="320" y2="67" stroke="#a9a9d0" stroke-width="1.5" marker-end="url(#ar)"/><text x="326" y="70" fill="#f4f4ff">y(n)</text>';
+  s.innerHTML=h;
+}
+
+function eq(){
+  var t='y(n) = ';
+  for(var k=0;k<N;k++){t+=(k?' + ':'')+'<span class="c'+k+'">'+a[k].toFixed(2)+'</span>·x(n'+(k?'−'+k:'')+')';}
+  document.getElementById('eq').innerHTML=t;
+  for(k=0;k<N;k++){var e=document.getElementById('dl'+k);if(e)e.textContent=a[k].toFixed(2);}
+}
+
+function render(){
+  geo=stemPlot(coefCv,a,['a0','a1','a2','a3'],true);
+  stemPlot(impCv,impulse(),['n=0','n=1','n=2','n=3','n=4','n=5'],false);
+  drawFreq();eq();
+}
+
+// touch / mouse dragging
+var active=-1;
+function setFrom(e){
+  var r=coefCv.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;
+  var i=active;
+  if(i<0)i=Math.max(0,Math.min(N-1,Math.floor((x-geo.x0)/geo.cw)));
+  active=i;
+  var v=(geo.mid-y)/geo.sc;v=Math.max(-1,Math.min(1,v));
+  if(Math.abs(v)<0.03)v=0;
+  a[i]=Math.round(v*100)/100;render();
+}
+coefCv.addEventListener('pointerdown',function(e){active=-1;coefCv.setPointerCapture(e.pointerId);setFrom(e);e.preventDefault();});
+coefCv.addEventListener('pointermove',function(e){if(active>=0)setFrom(e);});
+['pointerup','pointercancel'].forEach(function(n){coefCv.addEventListener(n,function(){active=-1;});});
+
+document.querySelectorAll('.pre button').forEach(function(b){
+  b.addEventListener('click',function(){a=b.dataset.p.split(',').map(Number);render();});
+});
+drawDiagram();
+window.addEventListener('resize',render);
+if(window.ResizeObserver)new ResizeObserver(render).observe(document.body);
+render();
+})();
+</script>
+</body>
+</html>
